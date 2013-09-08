@@ -19,9 +19,13 @@ numSides = 6
 stepsInAnimation :: Int
 stepsInAnimation = 25
 
+zoomToText :: IORef State -> String -> IO ()
+zoomToText stateRef text =
+  modifyIORef stateRef $ \s -> s { anim = Following (textToBabelChoices text)}
 
 kbd :: [(Key, IORef State -> IO ())]
-kbd = [(Char '\27', \_ -> exitWith ExitSuccess)] ++ moveHandlers
+kbd = [(Char '\27', \_ -> exitWith ExitSuccess)
+      ,(Char 'z', \stateRef -> zoomToText stateRef "THIS TEXT JUST WRITES ITSELF! AWESOME!")]  ++ moveHandlers
 
 moveHandlers = map moveHandlerForDir [0..numSides - 1]
   where
@@ -29,8 +33,8 @@ moveHandlers = map moveHandlerForDir [0..numSides - 1]
       (Char (chr (ord '0' + n))
       , \stateRef -> do {
             s <- readIORef stateRef
-          ; (case pos s of
-              Still -> writeIORef stateRef $ s { pos = Transitioning (Dir n) 0 stepsInAnimation }
+          ; (case anim s of
+              Still -> writeIORef stateRef $ s { anim = Transitioning (Dir n) 0 stepsInAnimation Still }
               _     -> return ())
         })
 
@@ -46,20 +50,28 @@ keyboard _ _ _ _ _ = return ()
 -- Either, you are stationary on a hexagon or you are 
 -- transitioning between it, at step n of m.
 --
-data State = State { pos :: Position, choices :: [Int]
-                   , indices :: StorableArray Int ArrayIndex
-                   , lens :: StorableArray Int NumArrayIndices} 
+data State = State { anim :: AnimState
+                   , revChoices :: [Int]
+                   , mdaSpec :: MultiDrawArraysSpec } 
+
 data Dir = Dir Int -- Direction n
-data Position = Still
-              | Transitioning Dir Int Int
+data AnimState = Still
+               | Transitioning Dir Int Int AnimState {- previous nav -}
+               | Following [Int] -- choices
+
+data MultiDrawArraysSpec = MultiDrawArraysSpec { mdaIndices :: StorableArray Int ArrayIndex
+                                               , mdaLengths :: StorableArray Int NumArrayIndices }
+
+
+
 
 main :: IO ()
 main = do
   getArgsAndInitialize
   w <- createWindow "Babel 2D"
   clientState VertexArray $= Enabled -- very important
-  (indices, lens) <- vertexArraySpec babelVertices
-  stateRef <- newIORef $ State { pos = Still, choices = [], indices = indices, lens = lens }
+  mdaSpec <- vertexArraySpec babelVertices
+  stateRef <- newIORef $ State { anim = Still, revChoices = [], mdaSpec = mdaSpec }
   clearColor $= Color4 0 0 0 0
   currentColor $= Color4 1 1 1 1
   initialDisplayMode $= [DoubleBuffered]
@@ -92,10 +104,14 @@ main = do
 transitionStep :: IORef State -> IO ()
 transitionStep stateRef = do
   modifyIORef stateRef $ 
-    \s -> case pos s of 
+    \s -> case anim s of 
             Still -> s
-            Transitioning d@(Dir i) n m -> if n < m then  s { pos = Transitioning d (n+1) m }
-                                            else  s { pos = Still, choices = i:choices s }
+            Transitioning d@(Dir i) n m prev ->
+              if n < m then  s { anim = Transitioning d (n+1) m prev}
+              else  s { anim = prev, revChoices = i:revChoices s }
+            Following []               -> s { anim = Still } 
+            Following (choice:choices) ->  
+              s { anim = Transitioning (Dir choice) 0 stepsInAnimation (Following choices) }
 
 colorWorkaround :: IO ()
 colorWorkaround = do
@@ -110,8 +126,9 @@ interpolate n m (Vertex2 fx fy) = ((-fx*frac, -fy*frac), 1 + 2*frac)
 
 drawPolygons :: State -> IO ()
 drawPolygons s = do
-  (_,i) <- getBounds (lens s)
-  withStorableArray (indices s) $ \indicesPtr -> withStorableArray (lens s) $ \lensPtr -> do
+  let m = mdaSpec s
+  (_,i) <- getBounds (mdaLengths m)
+  withStorableArray (mdaIndices m) $ \indicesPtr -> withStorableArray (mdaLengths m) $ \lensPtr -> do
     multiDrawArrays Polygon indicesPtr lensPtr (fromIntegral $ i+1)
 
 display :: Window -> IORef State -> IO ()
@@ -122,17 +139,18 @@ display w stateRef = do
   drawPolygons s
   
 --  mapM_ (renderPrimitive Polygon . (mapM_ vertex)) babelVertices
-  case pos s of 
+  case anim s of 
     Still -> loadIdentity
-    Transitioning (Dir d) n m -> do
+    Transitioning (Dir d) n m _ -> do
       loadIdentity
       let ((x,y), s) = interpolate n m (babelOrigins !! d)
       scale s s (1  :: GLfloat)
       translate (Vector3 x y (0.0 :: GLfloat))
+    _ -> return ()
   transitionStep stateRef
   colorWorkaround
   rasterPos (Vertex2 (-0.2) (0.5 :: GLfloat))
-  renderString Helvetica10 (babelToText . listToInteger .reverse $ choices s)
+  renderString Helvetica10 (babelToText . listToInteger .reverse $ revChoices s)
   swapBuffers
   postRedisplay (Just w)
 
@@ -148,12 +166,10 @@ about :: Num a => (Vertex2 a -> Vertex2 a) -> Vertex2 a -> (Vertex2 a -> Vertex2
 rotateAbout :: Floating a => a -> Vertex2 a -> Vertex2 a -> Vertex2 a
 rotateAbout t v v' = (rotate t `about` v) v'
 
-
 --
 --
 --
-vertexArraySpec :: [[Vertex2 GLfloat]] -> IO (StorableArray Int ArrayIndex,
-                                                StorableArray Int NumArrayIndices)
+vertexArraySpec :: [[Vertex2 GLfloat]] -> IO MultiDrawArraysSpec
 vertexArraySpec vss = do
   let (fs, indices, lens) = aux 0 vss ([],[],[])
   a <- newListArray (0,length fs-1) fs
@@ -161,7 +177,7 @@ vertexArraySpec vss = do
     arrayPointer VertexArray $= VertexArrayDescriptor 2 Float 0 ptr
   indicesArray <- newListArray (0,length indices-1) (map fromIntegral indices)
   lensArray   <- newListArray (0,length lens-1)    (map fromIntegral lens)
-  return (indicesArray, lensArray)
+  return $ MultiDrawArraysSpec { mdaIndices = indicesArray, mdaLengths =  lensArray }
   where
 
 aux :: Int -> [[Vertex2 GLfloat]]  ->   ([[GLfloat]], [Int], [Int]) -> ([GLfloat], [Int], [Int])

@@ -62,6 +62,12 @@ toBase b n = reverse $ aux n
 textToBabel s = (sequence . aux . reverse $ s) >>= \r -> return (foldl (\n m -> n*alphabetLen' + m) 0 r)
   where aux s = map (\c -> Map.lookup c alphaMap) s
 
+textToBabelChoices :: String -> [Int]
+textToBabelChoices s = fromJust $ fmap concat $ sequence $ map (fmap (toPair . fromIntegral)) $ map (\c -> Map.lookup c alphaMap) s
+  where
+    toPair :: Int -> [Int]
+    toPair n = [n `mod` 6, n `div` 6]
+
 babelToText :: Integer -> String
 babelToText n = aux n
   where 
