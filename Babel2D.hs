@@ -25,7 +25,10 @@ zoomToText stateRef text =
 
 kbd :: [(Key, IORef State -> IO ())]
 kbd = [(Char '\27', \_ -> exitWith ExitSuccess)
-      ,(Char 'z', \stateRef -> zoomToText stateRef "THIS TEXT JUST WRITES ITSELF! AWESOME!")]  ++ moveHandlers
+      ,(Char 'z', \stateRef -> do
+                     zoomToText stateRef "THIS TEXT JUST WRITES ITSELF! AWESOME!"
+                     postRedisplay Nothing)  ]  ++ moveHandlers
+
 
 moveHandlers = map moveHandlerForDir [0..numSides - 1]
   where
@@ -34,7 +37,9 @@ moveHandlers = map moveHandlerForDir [0..numSides - 1]
       , \stateRef -> do {
             s <- readIORef stateRef
           ; (case anim s of
-              Still -> writeIORef stateRef $ s { anim = Transitioning (Dir n) 0 stepsInAnimation Still }
+              Still -> do
+                writeIORef stateRef $ s { anim = Transitioning (Dir n) 0 stepsInAnimation Still }
+                postRedisplay Nothing
               _     -> return ())
         })
 
@@ -75,25 +80,6 @@ main = do
   clearColor $= Color4 0 0 0 0
   currentColor $= Color4 1 1 1 1
   initialDisplayMode $= [DoubleBuffered]
-
---  materialAmbient Front   $= Color4 0.1745 0.01175 0.001175 1
---  materialDiffuse Front   $= Color4 0.61424 0.04136 0.04136 1
---  materialSpecular Front  $= Color4 0.727811 0.626959 0.626950 1
---  materialShininess Front $= 0.6
---  position (Light 0)      $= Vertex4 0 0 1000 1
-
---  lineSmooth $= Enabled
---  blend $= Enabled
-
---  ambient (Light 0) $= Color4 0.3 0.3 0.3 1
---  specular (Light 0) $= Color4 1.0 1.0 1.0 1
---  diffuse (Light 0) $= Color4 1.0 1.0 1.0 1
-
---  normalize $= Enabled
-----  lighting $= Enabled
---  light (Light 0) $= Enabled
---  depthFunc $= Just Less
-
   displayCallback $= display w stateRef
   keyboardMouseCallback $= Just (keyboard stateRef)
   windowSize $= Size 800 800
@@ -103,15 +89,22 @@ main = do
 
 transitionStep :: IORef State -> IO ()
 transitionStep stateRef = do
+  s <- readIORef stateRef
+  case anim s of 
+    Transitioning _ _ _ _-> postRedisplay Nothing
+    Following _          -> postRedisplay Nothing
+    Still                -> return ()
   modifyIORef stateRef $ 
     \s -> case anim s of 
             Still -> s
             Transitioning d@(Dir i) n m prev ->
               if n < m then  s { anim = Transitioning d (n+1) m prev}
-              else  s { anim = prev, revChoices = i:revChoices s }
+                       else  s { anim = prev, revChoices = i:revChoices s }
             Following []               -> s { anim = Still } 
             Following (choice:choices) ->  
               s { anim = Transitioning (Dir choice) 0 stepsInAnimation (Following choices) }
+
+
 
 colorWorkaround :: IO ()
 colorWorkaround = do
@@ -134,25 +127,25 @@ drawPolygons s = do
 display :: Window -> IORef State -> IO ()
 display w stateRef = do
   s <- readIORef stateRef
-  clear [ColorBuffer, DepthBuffer]
-  color (Color4 1 1 1 (1 :: GLfloat))
-  drawPolygons s
-  
---  mapM_ (renderPrimitive Polygon . (mapM_ vertex)) babelVertices
   case anim s of 
-    Still -> loadIdentity
+    Still -> do
+      loadIdentity
     Transitioning (Dir d) n m _ -> do
       loadIdentity
       let ((x,y), s) = interpolate n m (babelOrigins !! d)
       scale s s (1  :: GLfloat)
       translate (Vector3 x y (0.0 :: GLfloat))
     _ -> return ()
-  transitionStep stateRef
+  -- now draw!
+  clear [ColorBuffer, DepthBuffer]
+  color (Color4 1 1 1 (1 :: GLfloat))
+  drawPolygons s
   colorWorkaround
   rasterPos (Vertex2 (-0.2) (0.5 :: GLfloat))
   renderString Helvetica10 (babelToText . listToInteger .reverse $ revChoices s)
   swapBuffers
-  postRedisplay (Just w)
+  transitionStep stateRef
+
 
 -- rotate a 2D point about the origin by t
 rotate :: Floating a => a -> Vertex2 a -> Vertex2 a
