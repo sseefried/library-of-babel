@@ -29,7 +29,7 @@ vertices = mkVertices (-0.5, 0.5) ++ mkVertices (0.5, -0.5)
 foo :: IO ()
 foo = do
   a <- newListArray (0,length vertices-1) vertices
-  withStorableArray a $ \ptr -> do
+  withStorableArray (a ::StorableArray Int GLfloat) $ \ptr -> do
     arrayPointer VertexArray $= VertexArrayDescriptor 
                                   2
                                   Float

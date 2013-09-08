@@ -6,15 +6,18 @@ import System.Exit
 import Data.IORef
 import Data.Char
 import Data.Array.Storable
+import Foreign.Storable
+import Foreign.C.Types (CInt)
 import Graphics.UI.GLUT.Fonts
 import Babel
+
 
 
 numSides :: Int
 numSides = 6
 
 stepsInAnimation :: Int
-stepsInAnimation = 15
+stepsInAnimation = 25
 
 
 kbd :: [(Key, IORef State -> IO ())]
@@ -43,7 +46,9 @@ keyboard _ _ _ _ _ = return ()
 -- Either, you are stationary on a hexagon or you are 
 -- transitioning between it, at step n of m.
 --
-data State = State { pos :: Position, choices :: [Int] } 
+data State = State { pos :: Position, choices :: [Int]
+                   , indices :: StorableArray Int ArrayIndex
+                   , lens :: StorableArray Int NumArrayIndices} 
 data Dir = Dir Int -- Direction n
 data Position = Still
               | Transitioning Dir Int Int
@@ -52,7 +57,9 @@ main :: IO ()
 main = do
   getArgsAndInitialize
   w <- createWindow "Babel 2D"
-  stateRef <- newIORef $ State { pos = Still, choices = [] }
+  clientState VertexArray $= Enabled -- very important
+  (indices, lens) <- vertexArraySpec babelVertices
+  stateRef <- newIORef $ State { pos = Still, choices = [], indices = indices, lens = lens }
   clearColor $= Color4 0 0 0 0
   currentColor $= Color4 1 1 1 1
   initialDisplayMode $= [DoubleBuffered]
@@ -100,12 +107,21 @@ interpolate :: Floating a => Int -> Int -> Vertex2 a -> ((a, a), a)
 interpolate n m (Vertex2 fx fy) = ((-fx*frac, -fy*frac), 1 + 2*frac)
   where frac = fromIntegral n/fromIntegral m
 
+
+drawPolygons :: State -> IO ()
+drawPolygons s = do
+  (_,i) <- getBounds (lens s)
+  withStorableArray (indices s) $ \indicesPtr -> withStorableArray (lens s) $ \lensPtr -> do
+    multiDrawArrays Polygon indicesPtr lensPtr (fromIntegral $ i+1)
+
 display :: Window -> IORef State -> IO ()
 display w stateRef = do
   s <- readIORef stateRef
   clear [ColorBuffer, DepthBuffer]
   color (Color4 1 1 1 (1 :: GLfloat))
-  mapM_ (renderPrimitive Polygon . (mapM_ vertex)) babelVertices
+  drawPolygons s
+  
+--  mapM_ (renderPrimitive Polygon . (mapM_ vertex)) babelVertices
   case pos s of 
     Still -> loadIdentity
     Transitioning (Dir d) n m -> do
@@ -132,6 +148,29 @@ about :: Num a => (Vertex2 a -> Vertex2 a) -> Vertex2 a -> (Vertex2 a -> Vertex2
 rotateAbout :: Floating a => a -> Vertex2 a -> Vertex2 a -> Vertex2 a
 rotateAbout t v v' = (rotate t `about` v) v'
 
+
+--
+--
+--
+vertexArraySpec :: [[Vertex2 GLfloat]] -> IO (StorableArray Int ArrayIndex,
+                                                StorableArray Int NumArrayIndices)
+vertexArraySpec vss = do
+  let (fs, indices, lens) = aux 0 vss ([],[],[])
+  a <- newListArray (0,length fs-1) fs
+  withStorableArray a $ \ptr -> do
+    arrayPointer VertexArray $= VertexArrayDescriptor 2 Float 0 ptr
+  indicesArray <- newListArray (0,length indices-1) (map fromIntegral indices)
+  lensArray   <- newListArray (0,length lens-1)    (map fromIntegral lens)
+  return (indicesArray, lensArray)
+  where
+
+aux :: Int -> [[Vertex2 GLfloat]]  ->   ([[GLfloat]], [Int], [Int]) -> ([GLfloat], [Int], [Int])
+aux _ []       (revFss,revIndices,revLens) = ((concat . reverse $ revFss), reverse revIndices, reverse revLens)
+aux n (vs:vss) (revFss,revIndices,revLens) = aux (n+len) vss (newFs:revFss,n:revIndices,len:revLens)
+  where
+    len = length vs
+    newFs :: [GLfloat]
+    newFs = concatMap (\(Vertex2 x y) -> [x,y]) vs
 --
 -- A list of polygons definining the Library of Babel.
 --
@@ -143,7 +182,7 @@ babelWorld r = (originsForNgonAngles r center, aux r center)
     originsForNgonAngles r o@(Vertex2 x y) = 
       map (\ang -> rotateAbout (ang+pi/(fromIntegral numSides)) o (Vertex2 (x+2*r) y)) (ngonAngles numSides)
     aux r o@(Vertex2 x y) 
-      | r < 0.001 = []
+      | r < 0.001= []
 
       | otherwise = ngon numSides o r:concatMap (aux (2*r/(fromIntegral numSides))) origins
       where
