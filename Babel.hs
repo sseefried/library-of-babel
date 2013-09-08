@@ -43,6 +43,14 @@ data Navigation = Back | Forward Integer
 
 ------------
 
+formatToWidth :: Int -> String -> String
+formatToWidth _ "" = ""
+formatToWidth n s = let (xs,ys) = splitAt n s 
+                    in xs ++ "\n" ++ formatToWidth n ys
+
+listToInteger :: [Int] -> Integer
+listToInteger xs = sum $ zipWith (\x y -> fromIntegral x * y) xs (map (numNavKeys^) [0..])
+
 toBase :: Int -> Integer -> String
 toBase b n = reverse $ aux n 
   where
@@ -70,33 +78,33 @@ poemString = "T'was the night before Christmas, and all through the house not a 
 
 numberOfBooks = (alphabetLen')^numberOfCharacters
 
-data State = State { address :: Integer }
+--data State = State { address :: Integer }
 
 
-keyToNav :: Char -> Maybe Navigation
-keyToNav c | c == back = Just Back
-           | otherwise =  case Map.lookup c navMap of
-                            Nothing -> Nothing
-                            Just i -> Just $ Forward i
+--keyToNav :: Char -> Maybe Navigation
+--keyToNav c | c == back = Just Back
+--           | otherwise =  case Map.lookup c navMap of
+--                            Nothing -> Nothing
+--                            Just i -> Just $ Forward i
 
-mainLoop :: IORef State -> IO ()
-mainLoop sRef = do
-  s <- readIORef sRef
-  putStrLn "\nYou're in a vast library of sentences. The sentence here is: "
-  printf "\n%s\n" $ babelToText $ address s
-  printf "\n\nWhich way? "
-  c <- getChar
-  modifyIORef sRef $ case keyToNav c of
-    Just Back        -> \s -> State { address = address s `div` numNavKeys } 
-    Just (Forward i) -> \s -> State { address = address s *  numNavKeys + i }
-    Nothing          -> id
+--mainLoop :: IORef State -> IO ()
+--mainLoop sRef = do
+--  s <- readIORef sRef
+--  putStrLn "\nYou're in a vast library of sentences. The sentence here is: "
+--  printf "\n%s\n" $ babelToText $ address s
+--  printf "\n\nWhich way? "
+--  c <- getChar
+--  modifyIORef sRef $ case keyToNav c of
+--    Just Back        -> \s -> State { address = address s `div` numNavKeys } 
+--    Just (Forward i) -> \s -> State { address = address s *  numNavKeys + i }
+--    Nothing          -> id
 
-  mainLoop sRef
+--  mainLoop sRef
 
-main :: IO ()
-main = do
-  sRef <- newIORef (State { address = 0 })
-  mainLoop sRef
+--main :: IO ()
+--main = do
+--  sRef <- newIORef (State { address = 0 })
+--  mainLoop sRef
 
 -----------
 
